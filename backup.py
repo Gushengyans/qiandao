@@ -4,30 +4,24 @@
 # Author: Binux<i@binux.me>
 #         http://binux.me
 # Created on 2014-08-09 11:39:25
+# pylint: disable=broad-exception-raised
 
-import json
-import time
-import datetime
-import re
-
-import config
 import sqlite3
 
-from sqlite3_db.basedb import BaseDB
 
-class DBnew(BaseDB):
+class DBnew():
     def __init__(self, path):
-        self.path = path        
-                
-    def new(self, userid, maindb):        
+        self.path = path
+
+    def new(self, userid, maindb):
         try:
             conn = sqlite3.connect(self.path)
             c = conn.cursor()
 
             c.execute('''CREATE TABLE IF NOT EXISTS `user` (
-                `id` INTEGER NOT NULL PRIMARY KEY  AUTO_INCREMENT,
+                `id` INTEGER NOT NULL PRIMARY KEY AUTO_INCREMENT,
                 `email` VARCHAR(256) NOT NULL,
-                `email_verified` TINYINT(1) NOT NULL DEFAULT 0,
+                `email_verified` TINYINT NOT NULL DEFAULT 0,
                 `password` VARBINARY(128) NOT NULL,
                 `password_md5` VARBINARY(128) NOT NULL DEFAULT '',
                 `userkey` VARBINARY(128) NOT NULL,
@@ -39,18 +33,18 @@ class DBnew(BaseDB):
                 `cip` VARBINARY(16) NOT NULL,
                 `mip` VARBINARY(16) NOT NULL,
                 `aip` VARBINARY(16) NOT NULL,
-                `skey` VARBINARY(128) NOT NULL DEFAULT '',
-                `barkurl` VARBINARY(128) NOT NULL DEFAULT '',
-                `wxpusher` VARBINARY(128) NOT NULL DEFAULT '',
+                `skey` VARCHAR(128) NOT NULL DEFAULT '',
+                `barkurl` VARCHAR(128) NOT NULL DEFAULT '',
+                `wxpusher` VARCHAR(128) NOT NULL DEFAULT '',
                 `noticeflg` INT UNSIGNED NOT NULL DEFAULT 1,
-                `logtime`  VARBINARY(1024) NOT NULL DEFAULT '{"en":false,"time":"20:00:00","ts":0,"schanEn":false,"WXPEn":false}',
-                `status`  VARBINARY(1024) NOT NULL DEFAULT 'Enable',
-                `notepad` TEXT NULL,
-                `diypusher` VARBINARY(1024) NOT NULL DEFAULT '',
-                `qywx_token` VARBINARY(1024) NOT NULL DEFAULT '',
-                `tg_token` VARBINARY(1024) NOT NULL DEFAULT '',
-                `dingding_token` VARBINARY(1024) NOT NULL DEFAULT '',
-                `push_batch`  VARBINARY(1024) NOT NULL DEFAULT '{"sw":false,"time":0,"delta":86400}'
+                `logtime`  VARCHAR(1024) NOT NULL DEFAULT '{"en":false,"time":"20:00:00","ts":0,"schanEn":false,"WXPEn":false}',
+                `status`  VARCHAR(1024) NOT NULL DEFAULT 'Enable',
+                `diypusher` VARCHAR(1024) NOT NULL DEFAULT '',
+                `qywx_token` VARCHAR(1024) NOT NULL DEFAULT '',
+                `qywx_webhook` VARCHAR(1024) NOT NULL DEFAULT '',
+                `tg_token` VARCHAR(1024) NOT NULL DEFAULT '',
+                `dingding_token` VARCHAR(1024) NOT NULL DEFAULT '',
+                `push_batch` VARCHAR(1024) NOT NULL DEFAULT '{"sw":false,"time":0,"delta":86400}'
                 );
                 CREATE TABLE IF NOT EXISTS `tpl` (
                 `id` INTEGER NOT NULL PRIMARY KEY AUTO_INCREMENT,
@@ -128,30 +122,35 @@ class DBnew(BaseDB):
                 `logDay` INT UNSIGNED NOT NULL DEFAULT 365,
                 `repos` TEXT NOT NULL
                 );
-                ''' )
+                CREATE TABLE IF NOT EXISTS `notepad` (
+                `id` INTEGER NOT NULL PRIMARY KEY,
+                `userid` INTEGER NOT NULL ,
+                `notepadid` INTEGER NOT NULL ,
+                `content` TEXT NULL
+                );
+                ''')
 
-            # 获取数据库信息            
+            # 获取数据库信息
             userid = int(userid)
-            user = maindb.db.user.get(id=userid, fields=('id', 'email', 'email_verified', 'password', 'password_md5', 'userkey', 'nickname', 'role', 'ctime', 'mtime', 'atime', 'cip',
-                                      'mip', 'aip', 'skey', 'barkurl', 'wxpusher', 'noticeflg', 'logtime', 'status', 'notepad', 'diypusher', 'qywx_token', 'tg_token', 'dingding_token', 'push_batch'))
-            userkey = maindb.db.user.__getuserkey(user['env'])
+            # user = maindb.db.user.get(id=userid, fields=('id', 'email', 'email_verified', 'password', 'password_md5', 'userkey', 'nickname', 'role', 'ctime', 'mtime', 'atime', 'cip',
+            #                           'mip', 'aip', 'skey', 'barkurl', 'wxpusher', 'noticeflg', 'logtime', 'status', 'notepad', 'diypusher', 'qywx_token', 'tg_token', 'dingding_token', 'qywx_webhook', 'push_batch'))
+            # userkey = maindb.db.user.__getuserkey(user['env'])
             tpls = []
-            for tpl in maindb.db.tpl.list(fields=('id', 'userid', 'siteurl', 'sitename', 'banner', 'disabled', 'public', 'lock', 'fork', 'har', 'tpl', 'variables', 'interval', 'note', 'success_count', 'failed_count', 'last_success', 'ctime', 'mtime', 'atime', 'tplurl', 'updateable', '_groups'), limit=None):
+            for tpl in maindb.db.tpl.list(fields=('id', 'userid', 'siteurl', 'sitename', 'banner', 'disabled', 'public', 'lock', 'fork', 'har', 'tpl', 'variables', 'interval', 'note', 'success_count', 'failed_count', 'last_success', 'ctime', 'mtime', 'atime', 'tplurl', 'updateable', '_groups', 'init_env'), limit=None):
                 if tpl['userid'] == userid:
                     tpls.append(tpl)
             tasks = []
             tasklogs = []
-            for task in maindb.db.task.list(userid, fields=('id', 'tplid', 'userid', 'note', 'disabled', 'init_env', 'env', 'session', 'retry_count', 'retry_interval', 'last_success', 'success_count', 
-                                                        'failed_count', 'last_failed', 'next', 'last_failed_count', 'ctime', 'mtime', 'ontimeflg', 'ontime',  '_groups', 'pushsw', 'newontime'), limit=None):
+            for task in maindb.db.task.list(userid, fields=('id', 'tplid', 'userid', 'note', 'disabled', 'init_env', 'env', 'session', 'retry_count', 'retry_interval', 'last_success', 'success_count',
+                                                            'failed_count', 'last_failed', 'next', 'last_failed_count', 'ctime', 'mtime', 'ontimeflg', 'ontime', '_groups', 'pushsw', 'newontime'), limit=None):
                 if task['userid'] == userid:
                     tasks.append(task)
-                    for tasklog in maindb.db.tasklog.list(taskid = task['id'], fields=('id', "taskid", "success", "ctime", "msg")):
+                    for tasklog in maindb.db.tasklog.list(taskid=task['id'], fields=('id', "taskid", "success", "ctime", "msg")):
                         tasklogs.append(tasklog)
 
             c.close()
             conn.close()
 
-             
         except Exception as e:
-            raise Exception("backup database error")
+            raise Exception("backup database error") from e
         print("OK")

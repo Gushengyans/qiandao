@@ -4,17 +4,28 @@
 # Author: Binux<i@binux.me>
 #         http://binux.me
 # Created on 2014-08-07 21:01:31
+# pylint: disable=broad-exception-raised
 
 import base64
-import umsgpack
-import config
+import random
+import re
+import string
+import sys
+from binascii import a2b_hex, b2a_hex
+from collections import namedtuple
 
-from pbkdf2 import PBKDF2
+import umsgpack  # type: ignore
 from Crypto import Random
-from Crypto.Hash import SHA256
 from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from pbkdf2 import PBKDF2  # type: ignore
+
+import config
+from libs.convert import to_bytes, to_text
 
 Crypto_random = Random.new()
+
+
 def password_hash(word, salt=None, iterations=config.pbkdf2_iterations):
     if salt is None:
         salt = Crypto_random.read(16)
@@ -27,60 +38,77 @@ def password_hash(word, salt=None, iterations=config.pbkdf2_iterations):
 
     return umsgpack.packb([rawhash, salt, iterations])
 
-def aes_encrypt(word, key=config.aes_key, iv=None):
+
+def aes_encrypt(word, key=config.aes_key, iv=None, output='base64', padding=True, padding_style='pkcs7', mode=AES.MODE_CBC, no_packb=False):
     if iv is None:
         iv = Crypto_random.read(16)
 
-    word = umsgpack.packb(word)
-    mod = len(word) % 16
-    if mod != 0:
-        word += b'\0' * (16-mod)
+    if not no_packb:
+        word = umsgpack.packb(word)
 
-    aes = AES.new(key, AES.MODE_CBC, iv)
+    if padding:
+        word = pad(word, AES.block_size, padding_style)
+
+    if mode in [AES.MODE_ECB, AES.MODE_CTR]:
+        aes = AES.new(key, mode)
+    else:
+        aes = AES.new(key, mode, iv)
+
     ciphertext = aes.encrypt(word)
-
+    if no_packb:
+        output = output.lower()
+        if output == 'base64':
+            return base64.encodebytes(ciphertext).decode('utf-8')
+        elif output == 'hex':
+            return b2a_hex(ciphertext).decode('utf-8')
+        return ciphertext
     return umsgpack.packb([ciphertext, iv])
 
-def aes_decrypt(word, key=config.aes_key, iv=None):
-    if iv is None:
-        word, iv = umsgpack.unpackb(word)
-    else:
-        raise Exception('no iv error')
 
-    aes = AES.new(key, AES.MODE_CBC, iv)
+def aes_decrypt(word, key=config.aes_key, iv=None, input='base64', padding=True, padding_style='pkcs7', mode=AES.MODE_CBC, no_packb=False):
+    if iv is None and not no_packb:
+        word, iv = umsgpack.unpackb(word)
+
+    if no_packb:
+        input = input.lower()
+        if input == 'base64':
+            word = base64.decodebytes(word)
+        elif input == 'hex':
+            word = a2b_hex(word)
+
+    if mode in [AES.MODE_ECB, AES.MODE_CTR]:
+        aes = AES.new(key, mode)
+    else:
+        aes = AES.new(key, mode, iv)
     word = aes.decrypt(word)
 
-    while word:
-        try:
-            return umsgpack.unpackb(word)
-        except umsgpack.ExtraData:
-            word = word[:-1]
+    if not no_packb:
+        while word:
+            try:
+                return umsgpack.unpackb(word)
+            except umsgpack.ExtraData:  # pylint: disable=no-member
+                word = word[:-1]
+    elif padding:
+        return unpad(word, AES.block_size, padding_style).decode('utf-8')
 
-
-from collections import namedtuple
-import random
-import re
-import string
-import sys
-
-from libs.convert import to_bytes, to_text
 
 DEFAULT_PASSWORD_LENGTH = 20
-ascii_lowercase = 'abcdefghijklmnopqrstuvwxyz'
-ascii_uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-ascii_letters = ascii_lowercase + ascii_uppercase
-digits = '0123456789'
-DEFAULT_PASSWORD_CHARS = to_text(ascii_letters + digits + ".,:-_", errors='strict')  # characters included in auto-generated passwords
+ASCII_LOWERCASE = 'abcdefghijklmnopqrstuvwxyz'
+ASCII_UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+ASCII_LETTERS = ASCII_LOWERCASE + ASCII_UPPERCASE
+DIGITS = '0123456789'
+DEFAULT_PASSWORD_CHARS = to_text(ASCII_LETTERS + DIGITS + ".,:-_", errors='strict')  # characters included in auto-generated passwords
 PASSLIB_E = CRYPT_E = None
 HAS_CRYPT = PASSLIB_AVAILABLE = False
 try:
-    import passlib
-    import passlib.hash
-    from passlib.utils.handlers import HasRawSalt, PrefixWrapper
+    import passlib  # type: ignore
+    import passlib.hash  # type: ignore
+    from passlib.utils.handlers import HasRawSalt  # type: ignore
+    from passlib.utils.handlers import PrefixWrapper
     try:
-        from passlib.utils.binary import bcrypt64
+        from passlib.utils.binary import bcrypt64  # type: ignore
     except ImportError:
-        from passlib.utils import bcrypt64
+        from passlib.utils import bcrypt64  # type: ignore
     PASSLIB_AVAILABLE = True
 except Exception as e:
     PASSLIB_E = e
@@ -90,7 +118,7 @@ try:
     HAS_CRYPT = True
 except Exception as e:
     CRYPT_E = e
-    
+
 
 def random_password(length=DEFAULT_PASSWORD_LENGTH, chars=DEFAULT_PASSWORD_CHARS, seed=None):
     '''Return a random password string of length containing only chars
@@ -100,13 +128,13 @@ def random_password(length=DEFAULT_PASSWORD_LENGTH, chars=DEFAULT_PASSWORD_CHARS
         letters, ascii digits, and these symbols ``.,:-_``
     '''
     if not isinstance(chars, str):
-        raise Exception('%s (%s) is not a text_type' % (chars, type(chars)))
+        raise Exception(f'{chars} ({type(chars)}) is not a text_type')
 
     if seed is None:
         random_generator = random.SystemRandom()
     else:
         random_generator = random.Random(seed)
-    return u''.join(random_generator.choice(chars) for dummy in range(length))
+    return ''.join(random_generator.choice(chars) for dummy in range(length))
 
 
 def random_salt(length=8):
@@ -114,7 +142,7 @@ def random_salt(length=8):
     """
     # Note passlib salt values must be pure ascii so we can't let the user
     # configure this
-    salt_chars = string.ascii_letters + string.digits + u'./'
+    salt_chars = string.ascii_letters + string.digits + './'
     return random_password(length=length, chars=salt_chars)
 
 
@@ -130,6 +158,7 @@ class BaseHash(object):
     def __init__(self, algorithm):
         self.algorithm = algorithm
 
+
 class CryptHash(BaseHash):
     def __init__(self, algorithm):
         super(CryptHash, self).__init__(algorithm)
@@ -141,7 +170,7 @@ class CryptHash(BaseHash):
             raise Exception("crypt.crypt not supported on Mac OS X/Darwin, install passlib python module")
 
         if algorithm not in self.algorithms:
-            raise Exception("crypt.crypt does not support '%s' algorithm" % self.algorithm)
+            raise Exception(f"crypt.crypt does not support '{self.algorithm}' algorithm")
         self.algo_data = self.algorithms[algorithm]
 
     def hash(self, secret, salt=None, salt_size=None, rounds=None, ident=None):
@@ -155,9 +184,7 @@ class CryptHash(BaseHash):
         ret = salt or random_salt(salt_size)
         if re.search(r'[^./0-9A-Za-z]', ret):
             raise Exception("invalid characters in salt")
-        if self.algo_data.salt_exact and len(ret) != self.algo_data.salt_size:
-            raise Exception("invalid salt size")
-        elif not self.algo_data.salt_exact and len(ret) > self.algo_data.salt_size:
+        if (self.algo_data.salt_exact and len(ret) != self.algo_data.salt_size) or (not self.algo_data.salt_exact and len(ret) > self.algo_data.salt_size):
             raise Exception("invalid salt size")
         return ret
 
@@ -179,17 +206,17 @@ class CryptHash(BaseHash):
     def _hash(self, secret, salt, rounds, ident):
         saltstring = ""
         if ident:
-            saltstring = "$%s" % ident
+            saltstring = f"${ident}"
 
         if rounds:
-            saltstring += "$rounds=%d" % rounds
+            saltstring += f"$rounds={rounds}"
 
-        saltstring += "$%s" % salt
+        saltstring += f"${salt}"
 
         # crypt.crypt on Python < 3.9 returns None if it cannot parse saltstring
         # On Python >= 3.9, it throws OSError.
         try:
-            result = Crypto.crypt(secret, saltstring)
+            result = Crypto.crypt(secret, saltstring)  # pylint: disable=no-member
             orig_exc = None
         except OSError as e:
             result = None
@@ -199,23 +226,24 @@ class CryptHash(BaseHash):
         # as no password at all.
         if not result:
             raise Exception(
-                "crypt.crypt does not support '%s' algorithm" % self.algorithm,
+                f"crypt.crypt does not support '{self.algorithm}' algorithm"  ,
                 orig_exc=orig_exc,
             )
 
         return result
-    
+
+
 class PasslibHash(BaseHash):
     def __init__(self, algorithm):
         super(PasslibHash, self).__init__(algorithm)
 
         if not PASSLIB_AVAILABLE:
-            raise Exception("passlib must be installed and usable to hash with '%s'" % algorithm, orig_exc=PASSLIB_E)
+            raise Exception(f"passlib must be installed and usable to hash with '{algorithm}'" , orig_exc=PASSLIB_E)
 
         try:
             self.crypt_algo = getattr(passlib.hash, algorithm)
-        except Exception:
-            raise Exception("passlib does not support '%s' algorithm" % algorithm)
+        except Exception as e:
+            raise Exception(f"passlib does not support '{algorithm}' algorithm") from e
 
     def hash(self, secret, salt=None, salt_size=None, rounds=None, ident=None):
         salt = self._clean_salt(salt)
@@ -278,20 +306,21 @@ class PasslibHash(BaseHash):
         elif hasattr(self.crypt_algo, 'encrypt'):
             result = self.crypt_algo.encrypt(secret, **settings)
         else:
-            raise Exception("installed passlib version %s not supported" % passlib.__version__)
+            raise Exception(f"installed passlib version {passlib.__version__} not supported")
 
         # passlib.hash should always return something or raise an exception.
         # Still ensure that there is always a result.
         # Otherwise an empty password might be assumed by some modules, like the user module.
         if not result:
-            raise Exception("failed to hash with algorithm '%s'" % self.algorithm)
+            raise Exception(f"failed to hash with algorithm '{self.algorithm}'")
 
         # Hashes from passlib.hash should be represented as ascii strings of hex
         # digits so this should not traceback.  If it's not representable as such
         # we need to traceback and then block such algorithms because it may
         # impact calling code.
         return to_text(result, errors='strict')
-    
+
+
 def passlib_or_crypt(secret, algorithm, salt=None, salt_size=None, rounds=None, ident=None):
     if PASSLIB_AVAILABLE:
         return PasslibHash(algorithm).hash(secret, salt=salt, salt_size=salt_size, rounds=rounds, ident=ident)

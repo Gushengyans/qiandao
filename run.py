@@ -1,34 +1,41 @@
-#! /usr/bin/env python
 # -*- coding: utf-8 -*-
 # vim:fenc=utf-8
 #
 # Copyright © 2016 Binux <roy@binux.me>
-from libs.log import Log
-import tornado.log
 
-import sys
+import asyncio
+import json
+import logging
+import os
 import platform
+import sys
+
+import tornado.log
+from tornado.httpserver import HTTPServer
+from tornado.ioloop import IOLoop, PeriodicCallback
+
 import config
+from db import DB, db_converter
+from db.basedb import engine
+from libs.log import Log
+from web.app import Application
+from worker import BatchWorker, QueueWorker
 
-from db import sqlite3_db_task_converter
-import requests
+if sys.getdefaultencoding() != 'utf-8':
+    import importlib
+    importlib.reload(sys)
 
-requests.packages.urllib3.disable_warnings()
 
-if __name__ == "__main__":
-    if sys.getdefaultencoding() != 'utf-8':
-        import importlib
-        importlib.reload(sys)
+def start_server():
     # init logging
     logger = Log().getlogger()
-    logger_Qiandao = Log('qiandao.run').getlogger()
+    logger_qd = Log('QD.Run').getlogger()
 
     if config.debug:
-        import logging
         channel = logging.StreamHandler(sys.stderr)
         channel.setFormatter(tornado.log.LogFormatter())
         channel.setLevel(logging.WARNING)
-        logger_Qiandao.addHandler(channel)
+        logger_qd.addHandler(channel)
 
     if not config.accesslog:
         tornado.log.access_log.disabled = True
@@ -46,57 +53,47 @@ if __name__ == "__main__":
     if config.multiprocess and config.autoreload:
         config.autoreload = False
 
-    if config.db_type == 'sqlite3':
-        import sqlite3_db as db
-    else:
-        import db
-
-    class DB(object):
-        def __init__(self) -> None:
-            self.user = db.UserDB()
-            self.tpl = db.TPLDB()
-            self.task = db.TaskDB()
-            self.tasklog = db.TaskLogDB()
-            self.push_request = db.PRDB()
-            self.redis = db.RedisDB()
-            self.site = db.SiteDB()
-            self.pubtpl = db.PubTplDB()
-        def close(self):
-            self.user.close()
-            self.tpl.close()
-            self.task.close()
-            self.tasklog.close()
-            self.push_request.close()
-            self.redis.close()
-            self.site.close()
-            self.pubtpl.close()
-        
-    database = DB()
-
     try:
-        from web.app import Application
-        converter = sqlite3_db_task_converter.DBconverter()
-        converter.ConvertNewType(DB()) 
-        converter.db.close()
+        database = DB()
+        converter = db_converter.DBconverter(database)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        run = asyncio.ensure_future(converter.convert_new_type(database) , loop=loop)
+        loop.run_until_complete(run)
 
-        from tornado.httpserver import HTTPServer
-        http_server = HTTPServer(Application(database), xheaders=True)
+        default_version = json.load(open(os.path.join(os.path.dirname(__file__), 'version.json'), 'r', encoding='utf-8'))['version']
+        app = Application(database, default_version)
+        http_server = HTTPServer(app, xheaders=True)
         http_server.bind(port, config.bind)
         if config.multiprocess:
             http_server.start(num_processes=0)
         else:
             http_server.start()
 
-        from worker import MainWorker
-        from tornado.ioloop import IOLoop, PeriodicCallback
-        worker = MainWorker(database)
-        PeriodicCallback(worker, config.check_task_loop).start()
-        worker()
+        io_loop = IOLoop.instance()
+        try:
+            if config.worker_method.upper() == 'QUEUE':
+                worker = QueueWorker(database)
+                io_loop.add_callback(worker)
+            elif config.worker_method.upper() == 'BATCH':
+                worker = BatchWorker(database)
+                PeriodicCallback(worker, config.check_task_loop).start()
+            else:
+                raise RuntimeError('worker_method must be Queue or Batch, please check config!')
+        except Exception as e:
+            logger.exception('worker start error: %s', e)
+            raise KeyboardInterrupt() from e
 
-        logger_Qiandao.info("Http Server started on %s:%s", config.bind, port)
-        IOLoop.instance().start()
+        logger_qd.info("Http Server started on %s:%s", config.bind, port)
+        io_loop.start()
     except KeyboardInterrupt :
-        logger_Qiandao.info("Http Server is being manually interrupted... ")
-        database.close()
-        logger_Qiandao.info("Http Server is ended. ")
+        logger_qd.info("Http Server is being manually interrupted... ")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        run = asyncio.ensure_future(engine.dispose() , loop=loop)
+        loop.run_until_complete(run)
+        logger_qd.info("Http Server is ended. ")
 
+
+if __name__ == "__main__":
+    start_server()

@@ -6,7 +6,9 @@
 # Created on 2014-07-30 16:02:08
 
 import json
-from .base import *
+
+from web.handlers.base import BaseHandler
+
 
 class IndexHandlers(BaseHandler):
     async def get(self):
@@ -16,7 +18,7 @@ class IndexHandlers(BaseHandler):
 
         tplid = self.get_argument('tplid', None)
         fields = ('id', 'sitename', 'success_count')
-        tpls = sorted(self.db.tpl.list(userid=None, fields=fields, limit=None), key=lambda t: -t['success_count'])
+        tpls = sorted(await self.db.tpl.list(userid=None, fields=fields, limit=None), key=lambda t: -t['success_count'])
         if not tpls:
             return await self.render('index.html', tpls=[], tplid=0, tpl=None, variables=[])
 
@@ -26,11 +28,14 @@ class IndexHandlers(BaseHandler):
                     tplid = tpl['id']
                     break
         tplid = int(tplid)
-        tpl = self.check_permission(self.db.tpl.get(tplid, fields=('id', 'userid', 'sitename', 'siteurl', 'note', 'variables')))
+        tpl = self.check_permission(await self.db.tpl.get(tplid, fields=('id', 'userid', 'sitename', 'siteurl', 'note', 'variables', 'init_env')))
         variables = json.loads(tpl['variables'])
-        
-        return await self.render('index.html', tpls=tpls, tplid=tplid, tpl=tpl, variables=variables)
+        if not tpl['init_env']:
+            tpl['init_env'] = '{}'
+
+        return await self.render('index.html', tpls=tpls, tplid=tplid, tpl=tpl, variables=variables, init_env=json.loads(tpl['init_env']))
+
 
 handlers = [
-        ('/', IndexHandlers),
-        ]
+    ('/', IndexHandlers),
+]

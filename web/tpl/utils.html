@@ -1,16 +1,26 @@
-{% macro header(current_user=True) %}
+{% macro qd_title(title="QD框架", sup=True) %}
+<h2 class="text-center">{{ title }}<sup id="qd_header_sup">{% if sup %}{{ version }}{% endif %}</sup></h2>
+<script>
+  var qd_header_sup = document.getElementById('qd_header_sup')
+  qd_header_sup.innerHTML = get_holiday_or_version(qd_header_sup.innerHTML)
+</script>
+{% endmacro %}
+
+{% macro header(current_user=True, title="QD框架", sup=True, about=True) %}
 <header>
   <div class="container">
-    <h2 class="text-center">私有签到框架<sup>{{ version }}</sup></h2>
+    {{ qd_title(title, sup) }}
     <div class="buttons">
       <a href="/" class="btn btn-default pull-left">首页</a>
+      {% if about %}
       <a href="/about/" class="btn btn-default pull-left">常用API/过滤器</a>
+      {% endif %}
       {% if current_user %}
       <a href="/logout" class="btn btn-default pull-right">登出</a>
       {% else %}
       <a href="/register" class="btn btn-default pull-right">注册</a>
       {% endif %}
-      
+
     </div>
   </div>
 </header>
@@ -49,10 +59,15 @@
       })
       .fail(function(jxhr, data) {
         $('#modal_load .modal-content')
-        .html('<h1 class="text-center alert alert-danger">FAIL</h1><div class="well"></div>')
+        .html('<h1 class="text-center alert alert-danger">运行失败</h1><div class="well"></div>')
         .find('.well').text(jxhr.responseText);
       })
-      .always(function() {
+      .always(function(jxhr) {
+        if (jxhr.status == 504) {
+          $('#modal_load .modal-content')
+          .html('<h1 class="text-center alert alert-danger">超时</h1><div class="well"></div>')
+          .find('.well').text('前端回调获取响应超时, 请耐心等待或刷新页面后查看执行结果');
+        }
         lock = false;
       })
       return false;
@@ -153,25 +168,36 @@ $(function() {
 
     if ($('body').attr('get-cookie')  != 'true') {
         //$this.html('没有插件，详情F12')
-        //console.log('如需要插件请访问https://github.com/ckx000/get-cookies/下载并手动安装插件');
+        //console.log('如需要插件请访问 https://github.com/qd-today/get-cookies/ 下载并手动安装插件');
         if($this.attr('getmod')==1){
-          $this.attr('href', 'https://github.com/ckx000/get-cookies/').attr('target', '_blank').html('安装后请刷新');
-        }else{$this.attr('getmod',1).html('再次点击前往安装GetCookie插件')}
+          $this.attr('href', 'https://github.com/qd-today/get-cookies/').attr('target', '_blank').html('安装插件后请刷新');
+        }else{$this.attr('getmod',1).html('再次点击前往安装 Get-Cookies 插件')}
     }
   });
   window.addEventListener("message", function(event) {
+    var cookie, cookie_str, key, ref, value;
     if (event.origin != window.location.origin) {
       return ;
     }
-
-    var cookie = event.data;
-    var cookie_str = "";
-    for (key in cookie) {
-      cookie_str += key+'='+cookie[key]+'; '
-    }
-    if (cookie_str == '') {
-      // alert('没有获得cookie，您是否已经登录？');
+    cookie = event.data;
+    cookie_str = "";
+    //排除未带特定key的postMessage
+    if (!cookie.info) {
       return;
+    }
+    //if (!cookie.info){cookie_str=="你可能在使用旧版get-cookies插件,请获取更新"};
+    if (cookie.info === 'cookieRaw') {
+      ref = cookie.data;
+      for (key in ref) {
+        value = ref[key];
+        cookie_str += key + '=' + value + '; ';
+      }
+      if (cookie_str === '') {
+        console.warn('没有获得cookie, 您是否已经登录?');
+        return;
+      }
+    } else if (cookie.info === 'get-cookieModReady') {
+      cookie_str = "get-cookie扩展已就绪";
     }
     $('#input-cookie').val(cookie_str);
   }, false);
